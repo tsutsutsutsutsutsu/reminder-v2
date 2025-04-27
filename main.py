@@ -1,40 +1,40 @@
-from flask import Flask, request, abort
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import os
 import json
 import gspread
+from flask import Flask, request, abort
 from google.oauth2.service_account import Credentials
+from linebot import LineBotApi, WebhookHandler
+from linebot.exceptions import InvalidSignatureError
+from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from dotenv import load_dotenv
 
-# .env 読み込み
+# .env読み込み
 load_dotenv()
 
-# Flask アプリの準備
-app = Flask(__name__)
-
-# LINE Messaging API 設定
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
-LINE_CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
+# LINE設定
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv('CHANNEL_ACCESS_TOKEN')
+LINE_CHANNEL_SECRET = os.getenv('CHANNEL_SECRET')
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# Google Sheets 認証設定
+# Google Sheets設定
 cred_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
 cred_dict = json.loads(cred_json)
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(cred_dict, scopes=scopes)
 gc = gspread.authorize(credentials)
 
-# スプレッドシートのIDとシートの取得
+# スプレッドシートアクセス
 SHEET_ID = "1cmnNlCU04Pe31l1IrUAn5SGlsx4T3o-KTgA715jss4Q"
-worksheet = gc.open_by_key(SHEET_ID).sheet1
+sh = gc.open_by_key(SHEET_ID)
+worksheet = sh.sheet1
 
-# Webhook エンドポイント
-@app.route("/callback", methods=["POST"])
+# Flaskアプリ
+app = Flask(__name__)
+
+@app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
 
     try:
@@ -42,23 +42,39 @@ def callback():
     except InvalidSignatureError:
         abort(400)
 
-    return "OK"
+    return 'OK'
 
-# メッセージイベントハンドラー
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    msg = event.message.text
-    reply_text = f"受け取ったメッセージ: {msg}"
-    
-    # スプレッドシートに書き込む
-    worksheet.append_row([msg, event.source.user_id])
+    text = event.message.text
+    user_id = event.source.user_id
 
+    # スプレッドシートからデータ取得
+    rows = worksheet.get_all_values()
+
+    for row in rows[1:]:  # 1行目はヘッダーなので飛ばす
+        id_value = row[0]
+        message = row[1]
+        remind_time = row[2]
+        target_user_id = row[3]
+        status = row[4] if len(row) > 4 else ""
+
+        if status.strip() == "キャンセル":
+            continue  # キャンセルされたものはスキップ
+
+        if user_id == target_user_id:
+            reply_text = f"【リマインド】{message}\nリマインド時刻: {remind_time}"
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=reply_text)
+            )
+            return
+
+    # 対応するものがなかった場合
     line_bot_api.reply_message(
         event.reply_token,
-        TextSendMessage(text=reply_text)
+        TextSendMessage(text="リマインド登録がありません。")
     )
 
-# Railway用にポート指定
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=8080)
