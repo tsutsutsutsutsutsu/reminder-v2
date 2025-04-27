@@ -34,7 +34,7 @@ app = Flask(__name__)
 # 通知タスク管理
 reminder_tasks = {}
 
-def send_reminder(user_id, message, reminder_id):
+def check_status_and_send(user_id, message, reminder_id):
     try:
         all_data = worksheet.get_all_values()
         headers = all_data[0]
@@ -43,18 +43,19 @@ def send_reminder(user_id, message, reminder_id):
 
         record = data_dict.get(reminder_id)
         if record:
-            status = record.get("状態")
-            if status == "キャンセル":
-                print(f"リマインドID {reminder_id} はキャンセルされました。通知しません。")
+            status = record.get("状態", "").strip()
+
+            # もし状態が「キャンセル」なら送信しない
+            if status.lower() == "キャンセル":
+                print(f"リマインドID {reminder_id} はキャンセルされました。通知スキップ。")
                 return
 
-        # キャンセルじゃなければ送信
-        line_bot_api.push_message(user_id, TextSendMessage(text=message))
-        print(f"リマインド送信完了: {message}")
+            # それ以外（「予約中」など）なら送信
+            line_bot_api.push_message(user_id, TextSendMessage(text=message))
+            print(f"リマインド送信成功: {message}")
     except Exception as e:
-        print(f"送信エラー: {e}")
+        print(f"エラー発生: {e}")
     finally:
-        # タスク管理から削除
         if reminder_id in reminder_tasks:
             del reminder_tasks[reminder_id]
 
@@ -81,25 +82,24 @@ def handle_message(event):
         remind_dt = now + timedelta(minutes=1)  # 1分後
         now_id = now.strftime("%Y%m%d%H%M%S")
 
-        # スプレッドシートに書き込む
-        new_row = [now_id, text, remind_dt.strftime("%Y-%m-%d %H:%M"), user_id, ""]
+        # スプレッドシートに書き込む（初期状態は「予約中」固定）
+        new_row = [now_id, text, remind_dt.strftime("%Y-%m-%d %H:%M"), user_id, "予約中"]
         worksheet.append_row(new_row)
 
-        # 通知予約
         delay = (remind_dt - now).total_seconds()
-        timer = threading.Timer(delay, send_reminder, args=(user_id, text, now_id))
+        timer = threading.Timer(delay, check_status_and_send, args=(user_id, text, now_id))
         timer.start()
         reminder_tasks[now_id] = timer
 
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="リマインドを登録しました！（1分後に通知）")
+            TextSendMessage(text=f"リマインド登録完了！\nID: {now_id}\nキャンセルしたい時はシートの状態を「キャンセル」にしてね。")
         )
     except Exception as e:
         print(f"登録エラー: {e}")
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="エラーが発生しました。")
+            TextSendMessage(text="登録中にエラーが発生しました。")
         )
 
 if __name__ == "__main__":
