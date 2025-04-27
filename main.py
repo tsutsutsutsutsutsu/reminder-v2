@@ -52,6 +52,12 @@ def check_status_and_send(user_id, message, reminder_id):
 
             # それ以外（「予約中」など）なら送信
             line_bot_api.push_message(user_id, TextSendMessage(text=message))
+
+            # 送信後に「送信済み」に更新
+            cell = worksheet.find(reminder_id)
+            if cell:
+                worksheet.update_cell(cell.row, headers.index("状態") + 1, "送信済み")
+
             print(f"リマインド送信成功: {message}")
     except Exception as e:
         print(f"エラー発生: {e}")
