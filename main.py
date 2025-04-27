@@ -34,13 +34,29 @@ app = Flask(__name__)
 # 通知タスク管理
 reminder_tasks = {}
 
-def send_reminder(user_id, message, id):
+def send_reminder(user_id, message, reminder_id):
     try:
+        all_data = worksheet.get_all_values()
+        headers = all_data[0]
+        rows = all_data[1:]
+        data_dict = {row[0]: dict(zip(headers, row)) for row in rows}
+
+        record = data_dict.get(reminder_id)
+        if record:
+            status = record.get("状態")
+            if status == "キャンセル":
+                print(f"リマインドID {reminder_id} はキャンセルされました。通知しません。")
+                return
+
+        # キャンセルじゃなければ送信
         line_bot_api.push_message(user_id, TextSendMessage(text=message))
+        print(f"リマインド送信完了: {message}")
     except Exception as e:
         print(f"送信エラー: {e}")
-    if id in reminder_tasks:
-        del reminder_tasks[id]
+    finally:
+        # タスク管理から削除
+        if reminder_id in reminder_tasks:
+            del reminder_tasks[reminder_id]
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -69,7 +85,7 @@ def handle_message(event):
         new_row = [now_id, text, remind_dt.strftime("%Y-%m-%d %H:%M"), user_id, ""]
         worksheet.append_row(new_row)
 
-        # すぐ送信セット
+        # 通知予約
         delay = (remind_dt - now).total_seconds()
         timer = threading.Timer(delay, send_reminder, args=(user_id, text, now_id))
         timer.start()
