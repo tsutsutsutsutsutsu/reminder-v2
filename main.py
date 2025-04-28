@@ -84,39 +84,37 @@ def handle_message(event):
     pass
 
 def schedule_reminders():
-    while True:
-        now = datetime.now()
-        all_data = worksheet.get_all_values()
-        headers = all_data[0]
-        rows = all_data[1:]
+    now = datetime.now()
+    today = now.date()
+    all_data = worksheet.get_all_values()
+    headers = all_data[0]
+    rows = all_data[1:]
 
-        for row in rows:
-            data = dict(zip(headers, row))
-            reminder_id = data.get("ID")
-            user_id = data.get("ユーザーID")
-            message = data.get("メッセージ")
-            remind_time = data.get("リマインド時刻")
-            status = data.get("状態", "").strip()
+    for row in rows:
+        data = dict(zip(headers, row))
+        reminder_id = data.get("ID")
+        user_id = data.get("ユーザーID")
+        message = data.get("メッセージ")
+        remind_date_str = data.get("リマインド時刻")
+        status = data.get("状態", "").strip()
 
-            if not reminder_id or not user_id or not message or not remind_time:
-                continue
-            if status not in ["予約中"]:
-                continue
-            if reminder_id in reminder_tasks:
-                continue
+        if not reminder_id or not user_id or not message or not remind_date_str:
+            continue
+        if status not in ["予約中"]:
+            continue
+        if reminder_id in reminder_tasks:
+            continue
 
-            try:
-                remind_dt = datetime.strptime(remind_time, "%Y-%m-%d %H:%M")
-                delay = (remind_dt - now).total_seconds()
-                if delay > 0:
-                    timer = threading.Timer(delay, check_status_and_send, args=(user_id, message, reminder_id))
-                    timer.start()
-                    reminder_tasks[reminder_id] = timer
-                    print(f"リマインド予約セット: {reminder_id} (delay {delay}秒)")
-            except Exception as e:
-                print(f"予約エラー: {e}")
-
-        threading.Event().wait(60)  # 60秒ごとに再チェック
+        try:
+            remind_date = datetime.strptime(remind_date_str, "%Y/%m/%d").date()
+            if remind_date == today:
+                delay = 60  # 今日なら1分後に通知
+                timer = threading.Timer(delay, check_status_and_send, args=(user_id, message, reminder_id))
+                timer.start()
+                reminder_tasks[reminder_id] = timer
+                print(f"リマインド予約セット: {reminder_id} (1分後に通知)")
+        except Exception as e:
+            print(f"予約エラー: {e}")
 
 if __name__ == "__main__":
     threading.Thread(target=schedule_reminders, daemon=True).start()
