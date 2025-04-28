@@ -36,6 +36,7 @@ reminder_tasks = {}
 
 def check_status_and_send(user_id, message, reminder_id):
     try:
+        print(f"user_id={user_id}")  # ここを追加
         all_data = worksheet.get_all_values()
         headers = all_data[0]
         rows = all_data[1:]
@@ -43,24 +44,21 @@ def check_status_and_send(user_id, message, reminder_id):
 
         record = data_dict.get(reminder_id)
         if record:
-            status = record.get("状態", "").strip()
+            status = record.get("\u72b6\u614b", "").strip()
 
-            # もし状態が「キャンセル」なら送信しない
-            if status.lower() == "キャンセル":
-                print(f"リマインドID {reminder_id} はキャンセルされました。通知スキップ。")
+            if status.lower() == "\u30ad\u30e3\u30f3\u30bb\u30eb":
+                print(f"\u30ea\u30de\u30a4\u30f3\u30c9ID {reminder_id} \u306f\u30ad\u30e3\u30f3\u30bb\u30eb\u3055\u308c\u307e\u3057\u305f\u3002\u901a知\u30b9\u30adップ。")
                 return
 
-            # それ以外（「予約中」など）なら送信
             line_bot_api.push_message(user_id, TextSendMessage(text=message))
 
-            # 送信後に「送信済み」に更新
             cell = worksheet.find(reminder_id)
             if cell:
-                worksheet.update_cell(cell.row, headers.index("状態") + 1, "送信済み")
+                worksheet.update_cell(cell.row, headers.index("\u72b6\u614b") + 1, "\u9001\u4fe1\u6e08\u307f")
 
-            print(f"リマインド送信成功: {message}")
+            print(f"\u30ea\u30de\u30a4\u30f3\u30c9\u9001\u4fe1\u6210\u529f: {message}")
     except Exception as e:
-        print(f"エラー発生: {e}")
+        print(f"\u30a8\u30e9\u30fc発生: {e}")
     finally:
         if reminder_id in reminder_tasks:
             del reminder_tasks[reminder_id]
@@ -73,19 +71,17 @@ def callback():
     try:
         handler.handle(body, signature)
     except Exception as e:
-        print(f"エラー: {e}")
+        print(f"\u30a8\u30e9\u30fc: {e}")
         abort(400)
 
     return "OK"
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    # 何もせずOKを返すだけ
     pass
 
 def schedule_reminders():
     now = datetime.now()
-    today = now.date()
     all_data = worksheet.get_all_values()
     headers = all_data[0]
     rows = all_data[1:]
@@ -93,28 +89,28 @@ def schedule_reminders():
     for row in rows:
         data = dict(zip(headers, row))
         reminder_id = data.get("ID")
-        user_id = data.get("ユーザーID")
-        message = data.get("メッセージ")
-        remind_date_str = data.get("リマインド時刻")
-        status = data.get("状態", "").strip()
+        user_id = data.get("\u30e6\u30fc\u30b6\u30fcID")
+        message = data.get("\u30e1\u30c3\u30bb\u30fc\u30b8")
+        remind_date = data.get("\u30ea\u30de\u30a4\u30f3\u30c9\u65e5")
+        status = data.get("\u72b6\u614b", "").strip()
 
-        if not reminder_id or not user_id or not message or not remind_date_str:
+        if not reminder_id or not user_id or not message or not remind_date:
             continue
-        if status not in ["予約中"]:
+        if status not in ["\u4e88\u7d04\u4e2d"]:
             continue
         if reminder_id in reminder_tasks:
             continue
 
         try:
-            remind_date = datetime.strptime(remind_date_str, "%Y/%m/%d").date()
-            if remind_date == today:
-                delay = 60  # 今日なら1分後に通知
+            remind_dt = datetime.strptime(remind_date, "%Y/%m/%d")
+            if remind_dt.date() == now.date():
+                delay = 60  # 1分後
                 timer = threading.Timer(delay, check_status_and_send, args=(user_id, message, reminder_id))
                 timer.start()
                 reminder_tasks[reminder_id] = timer
-                print(f"リマインド予約セット: {reminder_id} (1分後に通知)")
+                print(f"\u30ea\u30de\u30a4\u30f3\u30c9予約セット: {reminder_id} (delay {delay}秒)")
         except Exception as e:
-            print(f"予約エラー: {e}")
+            print(f"\u4e88約エラー: {e}")
 
 if __name__ == "__main__":
     threading.Thread(target=schedule_reminders, daemon=True).start()
