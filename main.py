@@ -3,93 +3,91 @@ import json
 import gspread
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from flask import Flask, request, abort
 from google.oauth2.service_account import Credentials
 from linebot import LineBotApi, WebhookHandler
-from linebot.models import TextSendMessage
-from linebot.models import MessageEvent, TextMessage
+from linebot.models import TextSendMessage, MessageEvent, TextMessage
 
-# .env 読み込み
+# --- 環境変数の読み込み ---
 load_dotenv()
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
+GOOGLE_SERVICE_ACCOUNT = os.getenv("GOOGLE_CREDENTIALS_JSON")  # Renderの環境変数名に合わせる
+SHEET_ID = "1cmnNlCU04Pe31l1IrUAn5SGlsx4T3o-KTgA715jss4Q"
 
-# LINE設定
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
-LINE_CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
+# --- LINE API 初期化 ---
+line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
 
-# Google Sheets設定
-cred_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-cred_dict = json.loads(cred_json)
+# --- Google Sheets 初期化 ---
+cred_dict = json.loads(GOOGLE_SERVICE_ACCOUNT)
+# 改行を戻す（Renderの環境変数対応）
+cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(cred_dict, scopes=scopes)
 gc = gspread.authorize(credentials)
+worksheet = gc.open_by_key(SHEET_ID).sheet1
 
-SHEET_ID = "1cmnNlCU04Pe31l1IrUAn5SGlsx4T3o-KTgA715jss4Q"
-sh = gc.open_by_key(SHEET_ID)
-worksheet = sh.sheet1
-
+# --- Flask アプリケーション ---
 app = Flask(__name__)
 
-# 通知管理
-def send_line_message(user_id, message, reminder_id):
-    try:
-        line_bot_api.push_message(user_id, TextSendMessage(text=message))
-        # 送信後に"送信済み"に更新
-        all_data = worksheet.get_all_values()
-        headers = all_data[0]
-        cell = worksheet.find(reminder_id)
-        if cell:
-            worksheet.update_cell(cell.row, headers.index("状態") + 1, "送信済み")
-        print(f"通知送信成功: {user_id}")
-    except Exception as e:
-        print(f"エラー発生: {e}")
-
+# --- Webhook エンドポイント ---
 @app.route("/callback", methods=["POST"])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers.get("X-Line-Signature")
     body = request.get_data(as_text=True)
-
     try:
         handler.handle(body, signature)
     except Exception as e:
-        print(f"エラー: {e}")
+        print(f"❌ Webhookエラー: {e}")
         abort(400)
-
     return "OK"
 
+# --- LINEメッセージ受信時の処理 ---
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    pass
+    print("✅ メッセージ受信！")
+    user_id = event.source.user_id
+    print(f"ユーザーID: {user_id}")
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="予約を受け付けました！"))
 
+# --- 通知処理 ---
+def send_line_message(user_id, message, row_index):
+    try:
+        line_bot_api.push_message(user_id, TextSendMessage(text=message))
+        worksheet.update_cell(row_index, 5, "送信済み")  # E列: 状態
+        worksheet.update_cell(row_index, 7, datetime.now().strftime("%Y/%m/%d %H:%M"))
+        print(f"✅ 通知送信成功: {user_id}")
+    except Exception as e:
+        print(f"❌ 通知エラー: {e}")
+        fail_count = int(worksheet.cell(row_index, 6).value or 0) + 1
+        worksheet.update_cell(row_index, 6, str(fail_count))
+        worksheet.update_cell(row_index, 5, "エラー")
+
+# --- 通知チェックループ ---
 def monitor_sheet():
-    checked_ids = set()
     while True:
-        all_data = worksheet.get_all_values()
-        headers = all_data[0]
-        rows = all_data[1:]
-
-        for row in rows:
-            data = dict(zip(headers, row))
-            reminder_id = data.get("ID")
-            user_id = data.get("ユーザーID")
-            message = data.get("メッセージ")
-            status = data.get("状態", "").strip()
-
-            if not reminder_id or not user_id or not message:
+        rows = worksheet.get_all_values()[1:]  # ヘッダーを除く
+        for idx, row in enumerate(rows, start=2):
+            if len(row) < 6:
                 continue
-            if status in ["送信済み", "キャンセル"]:
+            id_, message, remind_time, user_id, status, fail_count = row[:6]
+            if status.strip() in ["送信済み", "キャンセル"]:
                 continue
-            if reminder_id in checked_ids:
+            try:
+                remind_dt = datetime.strptime(remind_time, "%Y/%m/%d %H:%M")
+            except ValueError:
                 continue
+            if datetime.now() >= remind_dt:
+                send_line_message(user_id, message, idx)
+        time.sleep(10)
 
-            send_line_message(user_id, message, reminder_id)
-            checked_ids.add(reminder_id)
-
-        time.sleep(10)  # 10秒ごとにチェック
-
+# --- アプリ起動 ---
 if __name__ == "__main__":
+    # スレッドを開始
     threading.Thread(target=monitor_sheet, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    # Renderでの実行用にhostとportを設定
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
